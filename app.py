@@ -38,7 +38,7 @@ Hr = {
     'Expect': "100-continue",
     'X-Unity-Version': "2018.4.11f1",
     'X-GA': "v1 1",
-    'ReleaseVersion': os.getenv('RELEASE_VERSION', 'OB53')}
+    'ReleaseVersion': "OB53"}
 
 # ---- Random Colores ----
 def get_random_color():
@@ -91,7 +91,7 @@ async def EncRypTMajoRLoGin(open_id, access_token):
     major_login.event_time = str(datetime.now())[:-7]
     major_login.game_name = "free fire"
     major_login.platform_id = 1
-    major_login.client_version = os.getenv('GAME_CLIENT_VERSION', '1.123.2')
+    major_login.client_version = "1.123.2"
     major_login.system_software = "Android OS 9 / API-28 (PQ3B.190801.10101846/G9650ZHU2ARC6)"
     major_login.system_hardware = "Handheld"
     major_login.telecom_operator = "Verizon"
@@ -514,98 +514,73 @@ async def TcPChaT(ip, port, AutHToKen, key, iv, LoGinDaTaUncRypTinG, ready_event
 # ---------------------- FLASK ROUTES ----------------------
 
 loop = None
-emote_lock = threading.Lock()
 
 async def perform_emote(team_code: str, uids: list, emote_id: int):
     global key, iv, region, online_writer, BOT_UID
 
-    if online_writer is None or online_writer.is_closing():
-        raise RuntimeError("Bot is not connected to the game server")
-
-    if not team_code.isdigit():
-        raise ValueError("team_code must contain digits only")
-
-    if not 1 <= len(uids) <= 6:
-        raise ValueError("Provide between 1 and 6 UIDs")
+    if online_writer is None:
+        raise Exception("Bot not connected")
 
     try:
-        clean_uids = [int(x) for x in uids]
-    except (TypeError, ValueError):
-        raise ValueError("UIDs must be numeric")
-
-    # Serialize game actions so two HTTP requests cannot write interleaved packets.
-    with emote_lock:
+        # 1. JOIN SQUAD (super fast)
         EM = await GenJoinSquadsPacket(team_code, key, iv)
         await SEndPacKeT(None, online_writer, 'OnLine', EM)
+        await asyncio.sleep(0.12)  # minimal sync delay
 
-        # Give the server enough time to process the join before sending emote packets.
-        await asyncio.sleep(float(os.getenv('JOIN_DELAY', '0.75')))
-
-        for target_uid in clean_uids:
-            H = await Emote_k(target_uid, emote_id, key, iv, region)
+        # 2. PERFORM EMOTE instantly
+        for uid_str in uids:
+            uid = int(uid_str)
+            H = await Emote_k(uid, emote_id, key, iv, region)
             await SEndPacKeT(None, online_writer, 'OnLine', H)
-            await asyncio.sleep(float(os.getenv('EMOTE_DELAY', '0.10')))
 
+        # 3. LEAVE SQUAD instantly (correct bot UID)
         LV = await ExiT(BOT_UID, key, iv)
         await SEndPacKeT(None, online_writer, 'OnLine', LV)
-        await asyncio.sleep(float(os.getenv('LEAVE_DELAY', '0.25')))
+        await asyncio.sleep(0.03)
 
-    return {"status": "success", "message": "Emote request completed"}
+        return {"status": "success", "message": "Emote done & bot left instantly"}
 
-
-@app.route('/health')
-def health():
-    connected = online_writer is not None and not online_writer.is_closing()
-    return jsonify({
-        "status": "ok",
-        "bot_connected": connected,
-        "loop_running": loop is not None and not loop.is_closed()
-    }), 200
+    except Exception as e:
+        raise Exception(f"Failed to perform emote: {str(e)}")
 
 
 @app.route('/join')
 def join_team():
     global loop
-
-    team_code = (request.args.get('tc') or '').strip()
-    emote_id_str = (request.args.get('emote_id') or '').strip()
-    uids = [x.strip() for x in [
-        request.args.get('uid1'), request.args.get('uid2'), request.args.get('uid3'),
-        request.args.get('uid4'), request.args.get('uid5'), request.args.get('uid6')
-    ] if x and x.strip()]
+    team_code = request.args.get('tc')
+    uid1 = request.args.get('uid1')
+    uid2 = request.args.get('uid2')
+    uid3 = request.args.get('uid3')
+    uid4 = request.args.get('uid4')
+    uid5 = request.args.get('uid5')
+    uid6 = request.args.get('uid6')
+    emote_id_str = request.args.get('emote_id')
 
     if not team_code or not emote_id_str:
-        return jsonify({"status": "error", "message": "Missing tc or emote_id"}), 400
+        return jsonify({"status": "error", "message": "Missing tc or emote_id"})
 
     try:
         emote_id = int(emote_id_str)
-    except ValueError:
-        return jsonify({"status": "error", "message": "emote_id must be an integer"}), 400
+    except:
+        return jsonify({"status": "error", "message": "emote_id must be integer"})
+
+    uids = [uid for uid in [uid1, uid2, uid3, uid4, uid5, uid6] if uid]
 
     if not uids:
-        return jsonify({"status": "error", "message": "Provide at least one UID"}), 400
+        return jsonify({"status": "error", "message": "Provide at least one UID"})
 
-    if loop is None or loop.is_closed():
-        return jsonify({"status": "error", "message": "Bot event loop is not running"}), 503
-
-    future = asyncio.run_coroutine_threadsafe(
+    asyncio.run_coroutine_threadsafe(
         perform_emote(team_code, uids, emote_id), loop
     )
 
-    try:
-        result = future.result(timeout=float(os.getenv('REQUEST_TIMEOUT', '20')))
-        return jsonify({
-            **result,
-            "team_code": team_code,
-            "uids": uids,
-            "emote_id": emote_id
-        }), 200
-    except Exception as exc:
-        print(f"[EMOTE ERROR] {exc!r}", flush=True)
-        return jsonify({
-            "status": "error",
-            "message": str(exc)
-        }), 500
+    return jsonify({
+        "status": "success",
+        "team_code": team_code,
+        "uids": uids,
+        "emote_id": emote_id_str,
+        "message": "Emote triggered"
+    })
+
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -618,13 +593,9 @@ async def MaiiiinE():
     global loop, key, iv, region, BOT_UID
 
     # BOT LOGIN UID
-    BOT_UID = int(os.environ.get('BOT_UID', '0'))
-    Uid = os.environ.get('BOT_LOGIN_UID', '')
-    Pw = os.environ.get('BOT_LOGIN_PASSWORD', '')
+    BOT_UID = int('5354537195')  # <-- FIXED BOT UID
 
-    if not BOT_UID or not Uid or not Pw:
-        print('ERROR: Set BOT_UID, BOT_LOGIN_UID and BOT_LOGIN_PASSWORD environment variables.', flush=True)
-        return None
+    Uid, Pw = 'B284F06365FE01FC9ABC1CAEF85A4FFE38A2934B9AB40F0AC3806A13FA5DE72B'
 
     open_id, access_token = await GeNeRaTeAccEss(Uid, Pw)
     if not open_id or not access_token:
@@ -687,6 +658,9 @@ async def MaiiiinE():
     print(f"\n - BoT STarTinG And OnLine on TarGet : {TarGeT} | BOT NAME : {acc_name}")
     print(" - BoT sTaTus > GooD | OnLinE ! (: \n")
 
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
     await asyncio.gather(task1, task2)
 
 
@@ -701,7 +675,4 @@ async def StarTinG():
 
 
 if __name__ == '__main__':
-    # Start HTTP health/API server immediately, even if game login is still retrying.
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
     asyncio.run(StarTinG())
